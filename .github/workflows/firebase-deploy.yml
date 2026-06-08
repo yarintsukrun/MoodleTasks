@@ -1,0 +1,96 @@
+name: Deploy to Firebase
+
+# Continuous deployment: every push to main builds the app and deploys
+# Hosting + Cloud Functions + Firestore rules to Firebase.
+#
+# Required GitHub repository secrets (Settings → Secrets and variables → Actions):
+#   FIREBASE_SERVICE_ACCOUNT  -> full JSON of a Firebase/GCP service account key
+#   VITE_FIREBASE_PROJECT_ID  -> moodletasks (also used for deploy target)
+#   FIREBASE_PROJECT_ID       -> optional; defaults to VITE_FIREBASE_PROJECT_ID
+#   VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN, VITE_FIREBASE_PROJECT_ID,
+#   VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_FIREBASE_APP_ID
+#   VITE_FIREBASE_VAPID_KEY   -> Web Push key pair (Cloud Messaging settings)
+#   VITE_RECAPTCHA_SITE_KEY   -> App Check reCAPTCHA v3 site key (optional)
+#
+# Generate the service account key:
+#   Firebase Console → Project settings → Service accounts → Generate new private key
+#
+# Also set once locally (not in CI):
+#   firebase functions:secrets:set ENCRYPTION_KEY
+# CI deploy service account needs Secret Manager Admin + Cloud Scheduler Admin
+# (scheduled push: sendTaskPushMorning / sendTaskPushEvening).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Use `npm install` (not `npm ci`): lockfiles generated on Windows can omit
+      # Linux-only optional deps (e.g. Vite/rolldown native bindings), which makes
+      # the strict `npm ci` sync check fail on the Linux runner.
+      - name: Install app dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install functions dependencies
+        run: npm install --no-audit --no-fund
+        working-directory: functions
+
+      - name: Build web app
+        run: npm run build
+        env:
+          VITE_USE_EMULATORS: 'false'
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
+          VITE_RECAPTCHA_SITE_KEY: ${{ secrets.VITE_RECAPTCHA_SITE_KEY }}
+
+      # Resolve deploy project id (FIREBASE_PROJECT_ID or fallback to VITE_*).
+      - name: Verify deploy secrets
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::error::Missing GitHub secret FIREBASE_SERVICE_ACCOUNT (paste the full service account JSON)"
+            exit 1
+          fi
+          PROJECT_ID="${FIREBASE_PROJECT_ID:-$VITE_FIREBASE_PROJECT_ID}"
+          if [ -z "$PROJECT_ID" ]; then
+            echo "::error::Missing FIREBASE_PROJECT_ID or VITE_FIREBASE_PROJECT_ID (e.g. moodletasks)"
+            exit 1
+          fi
+          echo "PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
+
+      # Match local production: App Check enforcement in functions (gitignored locally)
+      - name: Write functions production env
+        run: echo "ENFORCE_APP_CHECK=true" > "functions/.env.$PROJECT_ID"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy to Firebase
+        run: firebase deploy --only hosting,functions,firestore --project "$PROJECT_ID" --non-interactive

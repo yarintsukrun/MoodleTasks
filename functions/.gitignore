@@ -1,0 +1,9 @@
+# Dependencies
+node_modules/
+
+# Emulator encryption key (local only — use Secret Manager in production)
+.secret.local
+
+# Per-project function env (e.g. .env.moodletasks with ENFORCE_APP_CHECK)
+.env
+.env.*

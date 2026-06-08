@@ -1,0 +1,2 @@
+/** Placeholder — real file is generated at dev/build from VITE_* env vars. See vite.config.ts */
+self.FIREBASE_SW_CONFIG = {}

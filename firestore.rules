@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Per-user settings (filters, task overrides, connection flags).
+    // Readable/writable only by the owner.
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Encrypted secrets (Moodle token, Gemini key). NO client access at all —
+    // only the Cloud Functions Admin SDK can read or write these.
+    match /secrets/{userId} {
+      allow read, write: if false;
+    }
+
+    // Rate-limit counters, managed only by Cloud Functions.
+    match /rateLimits/{userId} {
+      allow read, write: if false;
+    }
+
+    // Cached Moodle .ics per user (server-only, 15 min TTL).
+    match /calendarCache/{userId} {
+      allow read, write: if false;
+    }
+
+    // Push notification state (known task ids) — server-only.
+    match /notificationState/{userId} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pushEnabled", "order": "ASCENDING" },
+        { "fieldPath": "moodleConnected", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
