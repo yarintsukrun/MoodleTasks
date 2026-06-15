@@ -13,6 +13,10 @@ const unregisterPushTokenFn = httpsCallable<{ token: string }, { ok: boolean }>(
   functions,
   'unregisterPushToken',
 )
+const sendTestPushFn = httpsCallable<Record<string, never>, { ok: boolean; sent: number }>(
+  functions,
+  'sendTestPush',
+)
 
 export function pushSupported(): boolean {
   return typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator
@@ -30,7 +34,12 @@ export function showPushSetupUi(): boolean {
 }
 
 export function isIos(): boolean {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent)
+  // Classic iPhone/iPod/iPad UA, plus iPadOS 13+ which reports as "Macintosh"
+  // but is touch-capable (real Macs report maxTouchPoints === 0).
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)
+  )
 }
 
 export function isAndroid(): boolean {
@@ -90,6 +99,39 @@ export async function enablePushNotifications(): Promise<string> {
   await registerPushTokenFn({ token })
   storePushToken(token)
   return token
+}
+
+/** Ask the server to send an immediate test push to this user's devices. */
+export async function sendTestPushNotification(): Promise<number> {
+  const res = await sendTestPushFn({})
+  return res.data?.sent ?? 0
+}
+
+/**
+ * Show a notification from the foreground. iOS standalone PWAs do NOT support
+ * the `new Notification()` constructor (it throws "Illegal constructor"), so we
+ * route through the service worker's showNotification() and only fall back to
+ * the constructor on platforms that support it.
+ */
+export async function showLocalNotification(title: string, body: string): Promise<void> {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+  const options: NotificationOptions = { body, icon: '/icon-192.png' }
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration()
+      if (reg) {
+        await reg.showNotification(title, options)
+        return
+      }
+    }
+  } catch {
+    /* fall through to the constructor below */
+  }
+  try {
+    new Notification(title, options)
+  } catch {
+    /* iOS without an active SW registration — nothing more we can do */
+  }
 }
 
 export async function disablePushNotifications(): Promise<void> {

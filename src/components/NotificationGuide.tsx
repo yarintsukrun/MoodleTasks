@@ -10,6 +10,8 @@ import {
   needsIosHomeScreenInstall,
   pushConfigured,
   pushSupported,
+  sendTestPushNotification,
+  showLocalNotification,
   showPushSetupUi,
   subscribeForegroundMessages,
 } from '../services/notificationService'
@@ -198,6 +200,7 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
   const prefs = useMemo(() => mergeNotificationPrefs(settings.notificationPrefs), [settings.notificationPrefs])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [testState, setTestState] = useState<'idle' | 'sending' | 'sent'>('idle')
   const permission = pushSupported() ? getPushPermission() : 'unsupported'
   const enabled = settings.pushEnabled && permission === 'granted'
   const iosInstallFirst = needsIosHomeScreenInstall()
@@ -207,9 +210,7 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
     if (!enabled) return
     let unsub: (() => void) | null = null
     subscribeForegroundMessages((title, body) => {
-      if (Notification.permission === 'granted') {
-        new Notification(title, { body, icon: '/icon-192.png' })
-      }
+      void showLocalNotification(title, body)
     }).then((fn) => {
       unsub = fn
     })
@@ -239,6 +240,19 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
       setError(err instanceof Error ? err.message : 'Could not enable notifications.')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function handleTest() {
+    setError(null)
+    setTestState('sending')
+    try {
+      await sendTestPushNotification()
+      setTestState('sent')
+      setTimeout(() => setTestState('idle'), 6000)
+    } catch (err) {
+      setTestState('idle')
+      setError(err instanceof Error ? err.message : 'Could not send a test notification.')
     }
   }
 
@@ -321,6 +335,23 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
       )}
 
       {error && <p className="error">{error}</p>}
+
+      {enabled && (
+        <div className="notify-test-row">
+          <button
+            className="btn btn-ghost"
+            onClick={handleTest}
+            disabled={testState === 'sending'}
+          >
+            {testState === 'sending' ? 'Sending…' : 'Send test notification'}
+          </button>
+          {testState === 'sent' && (
+            <span className="muted notify-test-hint">
+              Sent — it can take a few seconds to arrive.
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="notify-guide-actions">
         {enabled ? (

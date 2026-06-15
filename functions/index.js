@@ -267,6 +267,61 @@ exports.registerPushToken = onCall(callOpts, async (request) => {
   return { ok: true, pushEnabled: true }
 })
 
+/** Send an immediate test push to the signed-in user's devices (used to verify delivery). */
+exports.sendTestPush = onCall(callOpts, async (request) => {
+  const uid = requireAuth(request)
+  requireAppCheck(request)
+  await enforceRateLimit(uid, 'push', 20, 60 * 60 * 1000)
+
+  const userRef = db.collection('users').doc(uid)
+  const userSnap = await userRef.get()
+  const userData = (userSnap.exists && userSnap.data()) || {}
+  const tokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens.filter(Boolean) : []
+  if (tokens.length === 0) {
+    throw new HttpsError('failed-precondition', 'No device registered. Enable notifications first.')
+  }
+
+  const res = await admin.messaging().sendEachForMulticast({
+    tokens,
+    notification: {
+      title: 'Moodle Tasks',
+      body: 'Test notification — your reminders are working.',
+    },
+    webpush: {
+      fcmOptions: { link: '/' },
+      notification: { icon: '/icon-192.png' },
+    },
+    data: { test: 'true', url: '/' },
+  })
+
+  const validTokens = []
+  res.responses.forEach((r, i) => {
+    if (r.success) {
+      validTokens.push(tokens[i])
+    } else if (
+      r.error?.code === 'messaging/invalid-registration-token' ||
+      r.error?.code === 'messaging/registration-token-not-registered'
+    ) {
+      logger.info('Removing stale FCM token on test push', { uid })
+    } else {
+      validTokens.push(tokens[i])
+      logger.warn('Test push send error', { uid, error: r.error?.message })
+    }
+  })
+
+  if (validTokens.length !== tokens.length) {
+    await userRef.set(
+      { fcmTokens: validTokens, pushEnabled: validTokens.length > 0 },
+      { merge: true },
+    )
+  }
+
+  if (res.successCount === 0) {
+    throw new HttpsError('internal', 'Could not deliver the test notification. Try re-enabling notifications.')
+  }
+  return { ok: true, sent: res.successCount }
+})
+
 /** Remove an FCM token when the user disables notifications. */
 exports.unregisterPushToken = onCall(callOpts, async (request) => {
   const uid = requireAuth(request)
