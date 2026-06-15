@@ -101,10 +101,31 @@ export async function enablePushNotifications(): Promise<string> {
   return token
 }
 
+function isNoDeviceRegisteredError(err: unknown): boolean {
+  const code =
+    err && typeof err === 'object' && 'code' in err ? String((err as { code: string }).code) : ''
+  const message = err instanceof Error ? err.message : String(err)
+  return (
+    code === 'functions/failed-precondition' ||
+    message.includes('No device registered')
+  )
+}
+
 /** Ask the server to send an immediate test push to this user's devices. */
 export async function sendTestPushNotification(): Promise<number> {
-  const res = await sendTestPushFn({})
-  return res.data?.sent ?? 0
+  try {
+    const res = await sendTestPushFn({})
+    return res.data?.sent ?? 0
+  } catch (err) {
+    // Self-heal: a stale client save may have wiped fcmTokens right after enable.
+    const token = getStoredPushToken()
+    if (isNoDeviceRegisteredError(err) && token) {
+      await registerPushTokenFn({ token })
+      const res = await sendTestPushFn({})
+      return res.data?.sent ?? 0
+    }
+    throw err
+  }
 }
 
 /**

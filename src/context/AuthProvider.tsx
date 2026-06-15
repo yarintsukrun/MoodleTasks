@@ -22,6 +22,32 @@ const disconnectFn = httpsCallable<{ which: 'moodle' | 'gemini' }, { ok: boolean
 
 const LOCAL_KEY = 'moodle-task-manager-settings'
 
+/** Fields the client may write to `users/{uid}`. Server-only fields (e.g. fcmTokens) are excluded. */
+const CLIENT_SETTINGS_KEYS = [
+  'overrides',
+  'hiddenTypes',
+  'hideOpens',
+  'pushEnabled',
+  'notificationPrefs',
+] as const satisfies readonly (keyof UserSettings)[]
+
+function pickClientSettings(settings: UserSettings): Partial<UserSettings> {
+  const out: Partial<UserSettings> = {}
+  for (const key of CLIENT_SETTINGS_KEYS) {
+    const value = settings[key]
+    if (value !== undefined) {
+      ;(out as Record<string, unknown>)[key] = value
+    }
+  }
+  return out
+}
+
+/** Strip server-managed fields before storing settings in React state / localStorage. */
+function toClientSettings(data: Record<string, unknown>): UserSettings {
+  const { fcmTokens: _tokens, ...rest } = data
+  return rest as UserSettings
+}
+
 /** Local fallback so the app still works before Firestore writes succeed. */
 function readLocal(): UserSettings {
   try {
@@ -47,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const snap = await getDoc(doc(db, 'users', u.uid))
           if (snap.exists()) {
-            const remote = snap.data() as UserSettings
+            const remote = toClientSettings(snap.data())
             setSettings(remote)
             writeLocal(remote)
           }
@@ -64,8 +90,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeLocal(next)
     if (user) {
       try {
-        // Merge so server-written connection flags are never clobbered.
-        await setDoc(doc(db, 'users', user.uid), { ...next, updatedAt: Date.now() }, { merge: true })
+        // Only write client-owned fields — never clobber server fields like fcmTokens.
+        await setDoc(
+          doc(db, 'users', user.uid),
+          { ...pickClientSettings(next), updatedAt: Date.now() },
+          { merge: true },
+        )
       } catch (err) {
         console.warn('Could not save settings to Firestore:', err)
       }
