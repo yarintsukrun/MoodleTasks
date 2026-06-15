@@ -19,14 +19,28 @@ const PHASE_LABEL: Record<string, string> = {
 interface Props {
   task: MoodleTask
   override: TaskOverride
+  isManual?: boolean
   onToggleDone: () => void
   onDismiss: () => void
   onTogglePin: () => void
   onAi: () => void
+  onEdit?: () => void
+  onDelete?: () => void
   aiBusy: boolean
 }
 
-export function TaskCard({ task, override, onToggleDone, onDismiss, onTogglePin, onAi, aiBusy }: Props) {
+export function TaskCard({
+  task,
+  override,
+  isManual = false,
+  onToggleDone,
+  onDismiss,
+  onTogglePin,
+  onAi,
+  onEdit,
+  onDelete,
+  aiBusy,
+}: Props) {
   const done = override.done ?? false
   const level = done ? 'done' : urgency(task.due)
   const meta = TYPE_META[task.type]
@@ -50,6 +64,7 @@ export function TaskCard({ task, override, onToggleDone, onDismiss, onTogglePin,
             <span className={`phase phase-${task.phase}`}>{PHASE_LABEL[task.phase]}</span>
           )}
           {override.pinned && <span className="pin-flag" title="Pinned">📌</span>}
+          {isManual && <span className="manual-flag" title="Personal task">✏️ Personal</span>}
         </div>
         {task.course && <div className="task-course" dir="auto">{task.course}</div>}
         {task.description && <p className="task-desc" dir="auto">{task.description}</p>}
@@ -73,12 +88,28 @@ export function TaskCard({ task, override, onToggleDone, onDismiss, onTogglePin,
             <button className="btn btn-ghost task-act" onClick={onToggleDone}>
               Reopen
             </button>
-            <button className="btn btn-ghost task-act task-act-danger" onClick={onDismiss}>
-              Remove
-            </button>
+            {isManual ? (
+              <button className="btn btn-ghost task-act task-act-danger" onClick={onDelete}>
+                Delete
+              </button>
+            ) : (
+              <button className="btn btn-ghost task-act task-act-danger" onClick={onDismiss}>
+                Remove
+              </button>
+            )}
           </>
         ) : (
           <>
+            {isManual && onEdit && (
+              <button className="icon-btn" onClick={onEdit} title="Edit task">
+                ✏️
+              </button>
+            )}
+            {isManual && onDelete && (
+              <button className="icon-btn" onClick={onDelete} title="Delete task">
+                🗑️
+              </button>
+            )}
             <button className="icon-btn" onClick={onTogglePin} title="Pin task">
               {override.pinned ? '📌' : '📍'}
             </button>

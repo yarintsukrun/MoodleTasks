@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/authContext'
 import { fetchMoodleCalendar } from '../services/moodleService'
 import { breakdownTask, generateStudyPlan } from '../services/geminiService'
-import type { MoodleTask, TaskFilter, TaskType } from '../types'
+import type { ManualTask, MoodleTask, TaskFilter, TaskType } from '../types'
+import { isManualTaskId, manualToMoodleTask } from '../types'
 import { urgency } from '../utils'
 import { TaskCard, TYPE_META } from './TaskCard'
 import { Stats } from './Stats'
@@ -12,6 +13,7 @@ import { WeekCalendar } from './WeekCalendar'
 import { NotificationPanel } from './NotificationPanel'
 import { ScrollRow } from './ScrollRow'
 import { LegalFooter } from './LegalFooter'
+import { ManualTaskForm } from './ManualTaskForm'
 
 type ViewMode = 'list' | 'calendar'
 
@@ -26,7 +28,16 @@ const TYPE_ORDER: TaskType[] = ['assignment', 'quiz', 'exam', 'attendance', 'sys
 const DEFAULT_HIDDEN: TaskType[] = ['attendance', 'system']
 
 export function Dashboard() {
-  const { user, settings, signOutUser, setOverride, saveSettings } = useAuth()
+  const {
+    user,
+    settings,
+    signOutUser,
+    setOverride,
+    saveSettings,
+    addManualTask,
+    updateManualTask,
+    deleteManualTask,
+  } = useAuth()
 
   const [tasks, setTasks] = useState<MoodleTask[]>([])
   const [loading, setLoading] = useState(false)
@@ -40,6 +51,7 @@ export function Dashboard() {
   const [course, setCourse] = useState('all')
   const [showSettings, setShowSettings] = useState(false)
   const [showNotifications, setShowNotifications] = useState(false)
+  const [manualForm, setManualForm] = useState<ManualTask | 'new' | null>(null)
 
   const [ai, setAi] = useState<{ title: string; content: string | null; loading: boolean; error: string | null } | null>(null)
   const [aiTaskId, setAiTaskId] = useState<string | null>(null)
@@ -47,6 +59,17 @@ export function Dashboard() {
   const overrides = settings.overrides ?? {}
   const hiddenTypes = settings.hiddenTypes ?? DEFAULT_HIDDEN
   const hideOpens = settings.hideOpens ?? true
+  const manualTasks = settings.manualTasks ?? []
+
+  const moodleTasks = tasks
+  const allTasks = useMemo(
+    () => [...moodleTasks, ...manualTasks.map(manualToMoodleTask)],
+    [moodleTasks, manualTasks],
+  )
+
+  const moodleConnected = settings.moodleConnected ?? false
+  const hasAnyTasks = allTasks.length > 0
+  const showTaskUi = moodleConnected || hasAnyTasks
 
   const loadTasks = useCallback(async (forceRefresh = false) => {
     if (!settings.moodleConnected) return
@@ -77,22 +100,22 @@ export function Dashboard() {
 
   const typeCounts = useMemo(() => {
     const counts: Partial<Record<TaskType, number>> = {}
-    tasks.forEach((t) => {
+    allTasks.forEach((t) => {
       counts[t.type] = (counts[t.type] ?? 0) + 1
     })
     return counts
-  }, [tasks])
+  }, [allTasks])
 
   // Tasks that pass the type / opens filters — used for stats and the list.
   const scoped = useMemo(
     () =>
-      tasks.filter(
+      allTasks.filter(
         (t) =>
           !overrides[t.id]?.dismissed &&
           !hiddenTypes.includes(t.type) &&
           !(hideOpens && t.phase === 'opens'),
       ),
-    [tasks, hiddenTypes, hideOpens, overrides],
+    [allTasks, hiddenTypes, hideOpens, overrides],
   )
 
   const courses = useMemo(() => {
@@ -170,8 +193,13 @@ export function Dashboard() {
     }
   }
 
-  const noUrl = !settings.moodleConnected
+  const noUrl = !moodleConnected
   const availableTypes = TYPE_ORDER.filter((t) => (typeCounts[t] ?? 0) > 0)
+
+  function openEditManual(taskId: string) {
+    const found = manualTasks.find((t) => t.id === taskId)
+    if (found) setManualForm(found)
+  }
 
   return (
     <div className="dash">
@@ -181,6 +209,14 @@ export function Dashboard() {
           <span className="brand-name">Moodle Tasks</span>
         </div>
         <div className="topbar-actions">
+          <button
+            className="btn btn-ghost btn-compact"
+            onClick={() => setManualForm('new')}
+            title="Add personal task"
+          >
+            <span aria-hidden>➕</span>
+            <span className="btn-compact-label">Add task</span>
+          </button>
           <button
             className="btn btn-ghost btn-compact"
             onClick={() => loadTasks(true)}
@@ -193,7 +229,7 @@ export function Dashboard() {
           <button
             className="btn btn-primary btn-compact"
             onClick={runStudyPlan}
-            disabled={noUrl}
+            disabled={!showTaskUi}
             title="AI study plan"
           >
             <span aria-hidden>✨</span>
@@ -222,15 +258,33 @@ export function Dashboard() {
       </header>
 
       <main className="content">
-        {noUrl ? (
+        {!showTaskUi ? (
           <div className="empty">
-            <div className="empty-icon">🔗</div>
-            <h2>Connect your Moodle calendar</h2>
-            <p className="muted">Add your calendar export URL to start tracking deadlines.</p>
-            <button className="btn btn-primary" onClick={() => setShowSettings(true)}>Add calendar URL</button>
+            <div className="empty-icon">📋</div>
+            <h2>Get started</h2>
+            <p className="muted">
+              Connect your Moodle calendar or add personal tasks that are not in Moodle.
+            </p>
+            <div className="empty-actions">
+              <button className="btn btn-primary" onClick={() => setManualForm('new')}>
+                Add personal task
+              </button>
+              <button className="btn btn-ghost" onClick={() => setShowSettings(true)}>
+                Connect Moodle calendar
+              </button>
+            </div>
           </div>
         ) : (
           <>
+            {noUrl && (
+              <div className="banner banner-info">
+                <span>Moodle is not connected — showing personal tasks only.</span>
+                <button className="btn btn-ghost" onClick={() => setShowSettings(true)}>
+                  Connect Moodle
+                </button>
+              </div>
+            )}
+
             <Stats tasks={scoped} overrides={overrides} />
 
             {availableTypes.length > 0 && (
@@ -321,7 +375,7 @@ export function Dashboard() {
               </div>
             )}
 
-            {loading && tasks.length === 0 ? (
+            {loading && allTasks.length === 0 ? (
               <div className="empty"><div className="spinner" /><p>Loading your deadlines…</p></div>
             ) : viewMode === 'calendar' ? (
               <WeekCalendar
@@ -342,9 +396,12 @@ export function Dashboard() {
                     key={t.id}
                     task={t}
                     override={overrides[t.id] ?? {}}
+                    isManual={isManualTaskId(t.id)}
                     onToggleDone={() => setOverride(t.id, { done: !(overrides[t.id]?.done ?? false) })}
                     onDismiss={() => setOverride(t.id, { dismissed: true, done: true })}
                     onTogglePin={() => setOverride(t.id, { pinned: !(overrides[t.id]?.pinned ?? false) })}
+                    onEdit={() => openEditManual(t.id)}
+                    onDelete={() => deleteManualTask(t.id)}
                     onAi={() => runBreakdown(t)}
                     aiBusy={aiTaskId === t.id}
                   />
@@ -352,7 +409,7 @@ export function Dashboard() {
               </div>
             )}
 
-            {lastSync && (
+            {lastSync && moodleConnected && (
               <p className="sync-note muted">
                 {fromCache ? 'Loaded from cache' : 'Fetched from Moodle'} · {lastSync.toLocaleTimeString()}
                 {!fromCache && ' · cache refreshes every 15 min'}
@@ -372,6 +429,16 @@ export function Dashboard() {
       )}
       {showNotifications && (
         <NotificationPanel onClose={() => setShowNotifications(false)} />
+      )}
+      {manualForm && (
+        <ManualTaskForm
+          initial={manualForm === 'new' ? undefined : manualForm}
+          onClose={() => setManualForm(null)}
+          onSave={async (input) => {
+            if (manualForm === 'new') await addManualTask(input)
+            else await updateManualTask(manualForm.id, input)
+          }}
+        />
       )}
     </div>
   )

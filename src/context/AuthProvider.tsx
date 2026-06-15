@@ -8,7 +8,8 @@ import {
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { auth, db, functions, googleProvider } from '../firebase'
-import type { TaskOverride, UserSettings } from '../types'
+import type { TaskOverride, UserSettings, ManualTask, ManualTaskInput } from '../types'
+import { MANUAL_TASK_ID_PREFIX } from '../types'
 import { AuthContext } from './authContext'
 
 const saveSecretsFn = httpsCallable<
@@ -29,6 +30,7 @@ const CLIENT_SETTINGS_KEYS = [
   'hideOpens',
   'pushEnabled',
   'notificationPrefs',
+  'manualTasks',
 ] as const satisfies readonly (keyof UserSettings)[]
 
 function pickClientSettings(settings: UserSettings): Partial<UserSettings> {
@@ -120,6 +122,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await persist({ ...settings, overrides })
   }
 
+  async function addManualTask(input: ManualTaskInput): Promise<ManualTask> {
+    const now = Date.now()
+    const task: ManualTask = {
+      ...input,
+      id: `${MANUAL_TASK_ID_PREFIX}${crypto.randomUUID()}`,
+      createdAt: now,
+      updatedAt: now,
+    }
+    const manualTasks = [...(settings.manualTasks ?? []), task]
+    await persist({ ...settings, manualTasks })
+    return task
+  }
+
+  async function updateManualTask(id: string, patch: Partial<ManualTaskInput>) {
+    const manualTasks = (settings.manualTasks ?? []).map((t) =>
+      t.id === id ? { ...t, ...patch, updatedAt: Date.now() } : t,
+    )
+    await persist({ ...settings, manualTasks })
+  }
+
+  async function deleteManualTask(id: string) {
+    const manualTasks = (settings.manualTasks ?? []).filter((t) => t.id !== id)
+    const overrides = { ...(settings.overrides ?? {}) }
+    delete overrides[id]
+    await persist({ ...settings, manualTasks, overrides })
+  }
+
   async function saveSecrets(input: { moodleUrl?: string; geminiKey?: string }) {
     const res = await saveSecretsFn(input)
     const flags: Partial<UserSettings> = {}
@@ -150,6 +179,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signOutUser,
         saveSettings,
         setOverride,
+        addManualTask,
+        updateManualTask,
+        deleteManualTask,
         saveSecrets,
         disconnectSecret,
       }}

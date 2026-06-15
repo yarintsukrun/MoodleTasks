@@ -119,11 +119,7 @@ async function obtainFcmToken(): Promise<string> {
   if (!messaging) throw new Error('Push notifications are not supported in this browser.')
 
   const reg = (await navigator.serviceWorker.getRegistration()) ?? (await ensureServiceWorker())
-  const stored = getStoredPushToken()
-  const token =
-    stored ??
-    (await getToken(messaging, { vapidKey, serviceWorkerRegistration: reg })) ??
-    null
+  const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: reg })
   if (!token) {
     throw new Error('Could not register for push notifications. Turn notifications off and on again.')
   }
@@ -148,12 +144,22 @@ export async function sendTestPushNotification(): Promise<number> {
 /**
  * Show a notification from the foreground. iOS standalone PWAs do NOT support
  * the `new Notification()` constructor (it throws "Illegal constructor"), so we
- * route through the service worker's showNotification() and only fall back to
- * the constructor on platforms that support it.
+ * route through the service worker there. Desktop Chrome works best with
+ * `new Notification()` when the tab is focused.
  */
 export async function showLocalNotification(title: string, body: string): Promise<void> {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
   const options: NotificationOptions = { body, icon: '/icon-192.png' }
+
+  if (!isIos()) {
+    try {
+      new Notification(title, options)
+      return
+    } catch {
+      /* fall through to service worker */
+    }
+  }
+
   try {
     if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.getRegistration()
@@ -163,12 +169,15 @@ export async function showLocalNotification(title: string, body: string): Promis
       }
     }
   } catch {
-    /* fall through to the constructor below */
+    /* fall through */
   }
-  try {
-    new Notification(title, options)
-  } catch {
-    /* iOS without an active SW registration — nothing more we can do */
+
+  if (isIos()) {
+    try {
+      new Notification(title, options)
+    } catch {
+      /* iOS without an active SW registration */
+    }
   }
 }
 
@@ -192,8 +201,8 @@ export async function subscribeForegroundMessages(
   const messaging = await getMessagingIfSupported()
   if (!messaging) return null
   return onMessage(messaging as Messaging, (payload) => {
-    const title = payload.notification?.title ?? 'Moodle Tasks'
-    const body = payload.notification?.body ?? ''
+    const title = payload.notification?.title ?? payload.data?.title ?? 'Moodle Tasks'
+    const body = payload.notification?.body ?? payload.data?.body ?? ''
     handler(title, body)
   })
 }

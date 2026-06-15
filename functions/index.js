@@ -4,7 +4,7 @@ const { defineSecret } = require('firebase-functions/params')
 const logger = require('firebase-functions/logger')
 const admin = require('firebase-admin')
 const { createCipheriv, createDecipheriv, randomBytes } = require('node:crypto')
-const { runTaskPushNotifications, bootstrapKnownTasks } = require('./notifications')
+const { runTaskPushNotifications, bootstrapKnownTasks, buildWebPushMulticast } = require('./notifications')
 
 admin.initializeApp()
 const db = admin.firestore()
@@ -276,53 +276,52 @@ exports.sendTestPush = onCall(callOpts, async (request) => {
   const userRef = db.collection('users').doc(uid)
   const userSnap = await userRef.get()
   const userData = (userSnap.exists && userSnap.data()) || {}
-  let tokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens.filter(Boolean) : []
+  let storedTokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens.filter(Boolean) : []
 
   const bodyToken = request.data && request.data.token
-  if (
-    typeof bodyToken === 'string' &&
-    bodyToken.length >= 20 &&
-    bodyToken.length <= 4096 &&
-    !tokens.includes(bodyToken)
-  ) {
-    tokens.push(bodyToken)
+  const hasBodyToken =
+    typeof bodyToken === 'string' && bodyToken.length >= 20 && bodyToken.length <= 4096
+
+  if (hasBodyToken && !storedTokens.includes(bodyToken)) {
+    storedTokens.push(bodyToken)
   }
 
-  if (tokens.length === 0) {
+  if (!hasBodyToken && storedTokens.length === 0) {
     throw new HttpsError('failed-precondition', 'No device registered. Enable notifications first.')
   }
 
-  await userRef.set({ fcmTokens: tokens, pushEnabled: true }, { merge: true })
+  const tokensToSend = hasBodyToken ? [bodyToken] : storedTokens
 
-  const res = await admin.messaging().sendEachForMulticast({
-    tokens,
-    notification: {
-      title: 'Moodle Tasks',
-      body: 'Test notification — your reminders are working.',
-    },
-    webpush: {
-      fcmOptions: { link: '/' },
-      notification: { icon: '/icon-192.png' },
-    },
-    data: { test: 'true', url: '/' },
-  })
+  await userRef.set({ fcmTokens: storedTokens, pushEnabled: true }, { merge: true })
 
-  const validTokens = []
+  const res = await admin.messaging().sendEachForMulticast(
+    buildWebPushMulticast(
+      tokensToSend,
+      'Moodle Tasks',
+      'Test notification — your reminders are working.',
+      { test: 'true', url: '/' },
+    ),
+  )
+
+  const validSent = new Set()
   res.responses.forEach((r, i) => {
-    if (r.success) {
-      validTokens.push(tokens[i])
-    } else if (
+    if (r.success) validSent.add(tokensToSend[i])
+    else if (
       r.error?.code === 'messaging/invalid-registration-token' ||
       r.error?.code === 'messaging/registration-token-not-registered'
     ) {
       logger.info('Removing stale FCM token on test push', { uid })
     } else {
-      validTokens.push(tokens[i])
       logger.warn('Test push send error', { uid, error: r.error?.message })
     }
   })
 
-  if (validTokens.length !== tokens.length) {
+  const validTokens = storedTokens.filter((t) => {
+    if (tokensToSend.includes(t) && !validSent.has(t)) return false
+    return true
+  })
+
+  if (validTokens.length !== storedTokens.length) {
     await userRef.set(
       { fcmTokens: validTokens, pushEnabled: validTokens.length > 0 },
       { merge: true },
@@ -330,7 +329,11 @@ exports.sendTestPush = onCall(callOpts, async (request) => {
   }
 
   if (res.successCount === 0) {
-    throw new HttpsError('internal', 'Could not deliver the test notification. Try re-enabling notifications.')
+    const errMsg = res.responses[0]?.error?.message
+    throw new HttpsError(
+      'internal',
+      errMsg || 'Could not deliver the test notification. Try re-enabling notifications.',
+    )
   }
   return { ok: true, sent: res.successCount }
 })

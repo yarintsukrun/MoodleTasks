@@ -8,6 +8,24 @@ const {
 
 const CALENDAR_CACHE_TTL_MS = 15 * 60 * 1000
 
+/** Data-only FCM multicast — required for reliable web push on Chrome (foreground + background). */
+function buildWebPushMulticast(tokens, title, body, extraData = {}) {
+  const data = {
+    title: String(title),
+    body: String(body),
+    url: '/',
+    icon: '/icon-192.png',
+  }
+  for (const [key, value] of Object.entries(extraData)) {
+    if (value !== undefined && value !== null) data[key] = String(value)
+  }
+  return {
+    tokens,
+    data,
+    webpush: { fcmOptions: { link: data.url } },
+  }
+}
+
 async function fetchUserIcs(db, uid, decrypt, getKey) {
   const cacheRef = db.collection('calendarCache').doc(uid)
   const cacheSnap = await cacheRef.get()
@@ -116,15 +134,9 @@ async function sendPushToUser(admin, db, uid, userData, slot, decrypt, getKey) {
   }
 
   const messaging = admin.messaging()
-  const res = await messaging.sendEachForMulticast({
-    tokens,
-    notification: { title: payload.title, body: payload.body },
-    webpush: {
-      fcmOptions: { link: '/' },
-      notification: { icon: '/icon-192.png' },
-    },
-    data: { slot, url: '/' },
-  })
+  const res = await messaging.sendEachForMulticast(
+    buildWebPushMulticast(tokens, payload.title, payload.body, { slot, url: '/' }),
+  )
 
   const validTokens = []
   res.responses.forEach((r, i) => {
@@ -188,4 +200,9 @@ async function bootstrapKnownTasks(db, uid, userSettings, decrypt, getKey) {
   )
 }
 
-module.exports = { runTaskPushNotifications, bootstrapKnownTasks, buildNotificationPayload }
+module.exports = {
+  runTaskPushNotifications,
+  bootstrapKnownTasks,
+  buildNotificationPayload,
+  buildWebPushMulticast,
+}

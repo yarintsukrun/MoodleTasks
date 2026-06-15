@@ -604,8 +604,13 @@
   font-weight: 600;
   color: var(--text-h);
 }
-.pin-flag {
+.pin-flag,
+.manual-flag {
   font-size: 0.8rem;
+}
+.manual-flag {
+  color: var(--accent-2);
+  font-weight: 500;
 }
 .task-course {
   font-size: 0.82rem;
@@ -832,6 +837,13 @@
 .empty-icon {
   font-size: 3rem;
 }
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 8px;
+}
 .banner {
   display: flex;
   align-items: center;
@@ -844,6 +856,12 @@
   background: rgba(255, 93, 108, 0.12);
   border: 1px solid rgba(255, 93, 108, 0.3);
   color: var(--overdue);
+}
+.banner-info {
+  background: rgba(124, 92, 255, 0.1);
+  border: 1px solid rgba(124, 92, 255, 0.25);
+  color: var(--text);
+  margin-bottom: 16px;
 }
 .sync-note {
   text-align: center;
@@ -941,6 +959,21 @@
   font-size: 0.8rem;
   color: var(--muted);
   line-height: 1.4;
+}
+.manual-task-lead {
+  margin: 0 0 16px;
+  font-size: 0.88rem;
+}
+.manual-task-notes {
+  resize: vertical;
+  min-height: 72px;
+  font-family: inherit;
+}
+.manual-task-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 /* ---------- Markdown (AI output) ---------- */

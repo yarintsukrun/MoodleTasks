@@ -56,7 +56,45 @@ export interface UserSettings {
   pushEnabled?: boolean
   /** What to notify about and when (09:00 / 18:00 checks). */
   notificationPrefs?: NotificationPrefs
+  /** User-created tasks not from Moodle. */
+  manualTasks?: ManualTask[]
   updatedAt?: number
+}
+
+/** A task the user added manually (stored in Firestore, not from Moodle ICS). */
+export interface ManualTask {
+  id: string
+  title: string
+  description?: string
+  course?: string
+  /** ISO 8601 date/time string — serializes cleanly to Firestore / localStorage. */
+  due: string
+  type: TaskType
+  createdAt: number
+  updatedAt: number
+}
+
+export type ManualTaskInput = Pick<ManualTask, 'title' | 'due' | 'type'> & {
+  description?: string
+  course?: string
+}
+
+export const MANUAL_TASK_ID_PREFIX = 'manual-'
+
+export function isManualTaskId(id: string): boolean {
+  return id.startsWith(MANUAL_TASK_ID_PREFIX)
+}
+
+export function manualToMoodleTask(m: ManualTask): MoodleTask {
+  return {
+    id: m.id,
+    title: m.title,
+    rawSummary: m.title,
+    course: m.course,
+    description: m.description,
+    due: new Date(m.due),
+    type: m.type,
+  }
 }
 
 /** User-configurable push notification options. */
