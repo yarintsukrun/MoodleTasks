@@ -3,7 +3,9 @@ import { useAuth } from '../context/authContext'
 import {
   disablePushNotifications,
   enablePushNotifications,
+  ensurePushTokenRegistered,
   getPushPermission,
+  getStoredPushToken,
   isAndroid,
   isIos,
   isStandalonePwa,
@@ -195,6 +197,13 @@ function NotifyPrefsEditor({
   )
 }
 
+function callableErrorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object' && 'message' in err) {
+    return String((err as { message: string }).message)
+  }
+  return fallback
+}
+
 export function NotificationGuide({ onClose, inPanel = false }: Props) {
   const { settings, saveSettings } = useAuth()
   const prefs = useMemo(() => mergeNotificationPrefs(settings.notificationPrefs), [settings.notificationPrefs])
@@ -202,7 +211,9 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [testState, setTestState] = useState<'idle' | 'sending' | 'sent'>('idle')
   const permission = pushSupported() ? getPushPermission() : 'unsupported'
+  const hasDeviceToken = Boolean(getStoredPushToken())
   const enabled = settings.pushEnabled && permission === 'granted'
+  const readyToPush = enabled && hasDeviceToken
   const iosInstallFirst = needsIosHomeScreenInstall()
   const showInstallHelp = !enabled && (iosInstallFirst || isAndroid() || isIos())
 
@@ -217,6 +228,12 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
     return () => {
       unsub?.()
     }
+  }, [enabled])
+
+  // Re-sync FCM token to the server when notifications look enabled (fixes wiped tokens).
+  useEffect(() => {
+    if (!enabled) return
+    ensurePushTokenRegistered().catch(() => {})
   }, [enabled])
 
   function patchPrefs(patch: Partial<NotificationPrefs>) {
@@ -237,7 +254,7 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
       await enablePushNotifications()
       await saveSettings({ pushEnabled: true, notificationPrefs: prefs })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not enable notifications.')
+      setError(callableErrorMessage(err, 'Could not enable notifications.'))
     } finally {
       setBusy(false)
     }
@@ -252,7 +269,7 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
       setTimeout(() => setTestState('idle'), 6000)
     } catch (err) {
       setTestState('idle')
-      setError(err instanceof Error ? err.message : 'Could not send a test notification.')
+      setError(callableErrorMessage(err, 'Could not send a test notification.'))
     }
   }
 
@@ -263,7 +280,7 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
       await disablePushNotifications()
       await saveSettings({ pushEnabled: false })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not disable notifications.')
+      setError(callableErrorMessage(err, 'Could not disable notifications.'))
     } finally {
       setBusy(false)
     }
@@ -334,9 +351,16 @@ export function NotificationGuide({ onClose, inPanel = false }: Props) {
         </p>
       )}
 
+      {enabled && !hasDeviceToken && (
+        <p className="error notify-denied">
+          Notifications are allowed but this device is not registered yet. Tap{' '}
+          <strong>Enable notifications</strong> again.
+        </p>
+      )}
+
       {error && <p className="error">{error}</p>}
 
-      {enabled && (
+      {readyToPush && (
         <div className="notify-test-row">
           <button
             className="btn btn-ghost"

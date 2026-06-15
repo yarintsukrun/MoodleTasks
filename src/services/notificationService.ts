@@ -13,7 +13,7 @@ const unregisterPushTokenFn = httpsCallable<{ token: string }, { ok: boolean }>(
   functions,
   'unregisterPushToken',
 )
-const sendTestPushFn = httpsCallable<Record<string, never>, { ok: boolean; sent: number }>(
+const sendTestPushFn = httpsCallable<{ token?: string }, { ok: boolean; sent: number }>(
   functions,
   'sendTestPush',
 )
@@ -101,31 +101,48 @@ export async function enablePushNotifications(): Promise<string> {
   return token
 }
 
-function isNoDeviceRegisteredError(err: unknown): boolean {
-  const code =
-    err && typeof err === 'object' && 'code' in err ? String((err as { code: string }).code) : ''
-  const message = err instanceof Error ? err.message : String(err)
-  return (
-    code === 'functions/failed-precondition' ||
-    message.includes('No device registered')
-  )
+async function obtainFcmToken(): Promise<string> {
+  if (!vapidKey?.trim()) {
+    throw new Error('Push is not configured yet (missing VAPID key in server setup).')
+  }
+  if (!pushSupported()) {
+    throw new Error('This browser does not support web push notifications.')
+  }
+  if (getPushPermission() !== 'granted') {
+    throw new Error('Notification permission was denied.')
+  }
+  if (isIos() && !isStandalonePwa()) {
+    throw new Error('On iPhone, add this app to your Home Screen first, then enable notifications.')
+  }
+
+  const messaging = await getMessagingIfSupported()
+  if (!messaging) throw new Error('Push notifications are not supported in this browser.')
+
+  const reg = (await navigator.serviceWorker.getRegistration()) ?? (await ensureServiceWorker())
+  const stored = getStoredPushToken()
+  const token =
+    stored ??
+    (await getToken(messaging, { vapidKey, serviceWorkerRegistration: reg })) ??
+    null
+  if (!token) {
+    throw new Error('Could not register for push notifications. Turn notifications off and on again.')
+  }
+  storePushToken(token)
+  return token
+}
+
+/** Ensure this device has an FCM token and that the server has stored it. */
+export async function ensurePushTokenRegistered(): Promise<string> {
+  const token = await obtainFcmToken()
+  await registerPushTokenFn({ token })
+  return token
 }
 
 /** Ask the server to send an immediate test push to this user's devices. */
 export async function sendTestPushNotification(): Promise<number> {
-  try {
-    const res = await sendTestPushFn({})
-    return res.data?.sent ?? 0
-  } catch (err) {
-    // Self-heal: a stale client save may have wiped fcmTokens right after enable.
-    const token = getStoredPushToken()
-    if (isNoDeviceRegisteredError(err) && token) {
-      await registerPushTokenFn({ token })
-      const res = await sendTestPushFn({})
-      return res.data?.sent ?? 0
-    }
-    throw err
-  }
+  const token = await obtainFcmToken()
+  const res = await sendTestPushFn({ token })
+  return res.data?.sent ?? 0
 }
 
 /**

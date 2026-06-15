@@ -276,10 +276,23 @@ exports.sendTestPush = onCall(callOpts, async (request) => {
   const userRef = db.collection('users').doc(uid)
   const userSnap = await userRef.get()
   const userData = (userSnap.exists && userSnap.data()) || {}
-  const tokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens.filter(Boolean) : []
+  let tokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens.filter(Boolean) : []
+
+  const bodyToken = request.data && request.data.token
+  if (
+    typeof bodyToken === 'string' &&
+    bodyToken.length >= 20 &&
+    bodyToken.length <= 4096 &&
+    !tokens.includes(bodyToken)
+  ) {
+    tokens.push(bodyToken)
+  }
+
   if (tokens.length === 0) {
     throw new HttpsError('failed-precondition', 'No device registered. Enable notifications first.')
   }
+
+  await userRef.set({ fcmTokens: tokens, pushEnabled: true }, { merge: true })
 
   const res = await admin.messaging().sendEachForMulticast({
     tokens,
