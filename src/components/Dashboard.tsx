@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/authContext'
 import { fetchMoodleCalendar } from '../services/moodleService'
 import { breakdownTask, generateStudyPlan } from '../services/geminiService'
+import { showLocalNotification, subscribeForegroundMessages } from '../services/notificationService'
 import type { ManualTask, MoodleTask, TaskFilter, TaskType } from '../types'
 import { isManualTaskId, manualToMoodleTask } from '../types'
 import { urgency } from '../utils'
@@ -90,6 +91,24 @@ export function Dashboard() {
   useEffect(() => {
     loadTasks()
   }, [loadTasks])
+
+  // While a tab is focused, FCM hands data-only pushes to the page instead of
+  // the service worker, so someone must display them for the whole session —
+  // not only while the notifications panel is open. Harmless without a token.
+  useEffect(() => {
+    let cancelled = false
+    let unsub: (() => void) | null = null
+    subscribeForegroundMessages((title, body) => {
+      void showLocalNotification(title, body)
+    }).then((fn) => {
+      if (cancelled) fn?.()
+      else unsub = fn
+    })
+    return () => {
+      cancelled = true
+      unsub?.()
+    }
+  }, [])
 
   function toggleType(type: TaskType) {
     const next = hiddenTypes.includes(type)

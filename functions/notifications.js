@@ -59,10 +59,11 @@ async function fetchUserIcs(db, uid, decrypt, getKey) {
   return ics
 }
 
+/** `knownIds` is null when no state exists yet (first run: don't report everything as new). */
 function buildNotificationPayload(actionable, knownIds, prefsInput, now = new Date()) {
   const prefs = mergeNotificationPrefs(prefsInput)
   const known = new Set(knownIds || [])
-  const isBootstrap = known.size === 0
+  const isBootstrap = knownIds == null
 
   let dueToday = prefs.dueToday ? actionable.filter((t) => daysUntil(t.due, now) === 0) : []
   let dueTomorrow = prefs.dueTomorrow
@@ -118,7 +119,8 @@ async function sendPushToUser(admin, db, uid, userData, slot, decrypt, getKey) {
 
   const stateRef = db.collection('notificationState').doc(uid)
   const stateSnap = await stateRef.get()
-  const knownIds = stateSnap.exists ? stateSnap.data().knownTaskIds : []
+  const storedIds = stateSnap.exists ? stateSnap.get('knownTaskIds') : undefined
+  const knownIds = Array.isArray(storedIds) ? storedIds : null
 
   const payload = buildNotificationPayload(actionable, knownIds, userData.notificationPrefs)
   if (!payload) {
@@ -185,12 +187,30 @@ async function runTaskPushNotifications(admin, db, slot, decrypt, getKey) {
   return results
 }
 
+/** State older than this means the scheduled job hasn't been tracking the user. */
+const KNOWN_TASKS_STALE_MS = 24 * 60 * 60 * 1000
+
 async function bootstrapKnownTasks(db, uid, userSettings, decrypt, getKey) {
+  const stateRef = db.collection('notificationState').doc(uid)
+  const stateSnap = await stateRef.get()
+  const updatedAt = stateSnap.exists ? stateSnap.get('updatedAt') : undefined
+  // Seed only when there's no fresh state. Re-seeding on every registration
+  // marked tasks added since the last scheduled run as "known" and swallowed
+  // their "new task" alert; stale state (push was off) would instead report
+  // everything added meanwhile as new.
+  if (
+    Array.isArray(stateSnap.exists ? stateSnap.get('knownTaskIds') : undefined) &&
+    typeof updatedAt === 'number' &&
+    Date.now() - updatedAt < KNOWN_TASKS_STALE_MS
+  ) {
+    return
+  }
+
   const ics = await fetchUserIcs(db, uid, decrypt, getKey)
   if (!ics) return
   const tasks = parseICS(ics)
   const actionable = filterTasksForNotifications(tasks, userSettings)
-  await db.collection('notificationState').doc(uid).set(
+  await stateRef.set(
     { knownTaskIds: actionable.map((t) => t.id), updatedAt: Date.now() },
     { merge: true },
   )

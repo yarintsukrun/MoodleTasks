@@ -9,7 +9,7 @@ const registerPushTokenFn = httpsCallable<{ token: string }, { ok: boolean }>(
   functions,
   'registerPushToken',
 )
-const unregisterPushTokenFn = httpsCallable<{ token: string }, { ok: boolean }>(
+const unregisterPushTokenFn = httpsCallable<{ token: string }, { ok: boolean; pushEnabled: boolean }>(
   functions,
   'unregisterPushToken',
 )
@@ -181,18 +181,25 @@ export async function showLocalNotification(title: string, body: string): Promis
   }
 }
 
-export async function disablePushNotifications(): Promise<void> {
+/**
+ * Turn off push on this device only. Returns whether the account still has
+ * other devices registered (server's `pushEnabled`), or null if this device
+ * had no stored token to unregister.
+ */
+export async function disablePushNotifications(): Promise<boolean | null> {
   const token = getStoredPushToken()
   const messaging = await getMessagingIfSupported()
-  if (messaging && token) {
+  if (messaging) {
     try {
       await deleteToken(messaging)
     } catch {
       /* token may already be invalid */
     }
   }
-  await unregisterPushTokenFn({ token: token ?? '' })
+  if (!token) return null
+  const res = await unregisterPushTokenFn({ token })
   storePushToken(null)
+  return res.data.pushEnabled
 }
 
 /**

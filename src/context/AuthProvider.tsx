@@ -26,12 +26,14 @@ const disconnectFn = httpsCallable<{ which: 'moodle' | 'gemini' }, { ok: boolean
 const LEGACY_LOCAL_KEY = 'moodle-task-manager-settings'
 const localKey = (uid: string) => `${LEGACY_LOCAL_KEY}:${uid}`
 
-/** Fields the client may write to `users/{uid}`. Server-only fields (e.g. fcmTokens) are excluded. */
+/**
+ * Fields the client may write to `users/{uid}`. Server-only fields (fcmTokens,
+ * pushEnabled) are excluded — the rules reject client changes to them.
+ */
 const CLIENT_SETTINGS_KEYS = [
   'overrides',
   'hiddenTypes',
   'hideOpens',
-  'pushEnabled',
   'notificationPrefs',
   'manualTasks',
 ] as const satisfies readonly (keyof UserSettings)[]
@@ -145,6 +147,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await persist({ ...settings, ...patch })
   }
 
+  /** Mirror server-managed flags locally without writing them to Firestore. */
+  function applyServerState(patch: Pick<UserSettings, 'pushEnabled'>) {
+    // Functional update so it isn't clobbered by a save from the same handler.
+    setSettings((prev) => {
+      const next = { ...prev, ...patch }
+      if (user) writeLocal(user.uid, next)
+      return next
+    })
+  }
+
   async function setOverride(taskId: string, patch: Partial<TaskOverride>) {
     const overrides = { ...(settings.overrides ?? {}) }
     overrides[taskId] = { ...overrides[taskId], ...patch }
@@ -207,6 +219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signIn,
         signOutUser,
         saveSettings,
+        applyServerState,
         setOverride,
         addManualTask,
         updateManualTask,

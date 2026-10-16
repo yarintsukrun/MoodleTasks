@@ -9,6 +9,8 @@ export interface AuthContextValue {
   signIn: () => Promise<void>
   signOutUser: () => Promise<void>
   saveSettings: (patch: Partial<UserSettings>) => Promise<void>
+  /** Update server-managed flags (e.g. pushEnabled) in local state only. */
+  applyServerState: (patch: Pick<UserSettings, 'pushEnabled'>) => void
   setOverride: (taskId: string, patch: Partial<TaskOverride>) => Promise<void>
   addManualTask: (input: ManualTaskInput) => Promise<ManualTask>
   updateManualTask: (id: string, patch: Partial<ManualTaskInput>) => Promise<void>

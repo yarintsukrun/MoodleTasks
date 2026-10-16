@@ -385,23 +385,20 @@ exports.sendTestPush = onCall(callOpts, async (request) => {
 exports.unregisterPushToken = onCall(callOpts, async (request) => {
   const uid = requireAuth(request)
   requireAppCheck(request)
+  await enforceRateLimit(uid, 'push', 20, 60 * 60 * 1000)
   const token = request.data && request.data.token
   const userRef = db.collection('users').doc(uid)
   const userSnap = await userRef.get()
   const userData = (userSnap.exists && userSnap.data()) || {}
-  let tokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens : []
+  const tokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens : []
 
-  if (typeof token === 'string' && token) {
-    tokens = tokens.filter((t) => t !== token)
-  } else {
-    tokens = []
-  }
+  // Remove only this device's token — other devices keep their reminders.
+  // A missing token is a no-op (it used to wipe every device).
+  const remaining = typeof token === 'string' && token ? tokens.filter((t) => t !== token) : tokens
+  const pushEnabled = remaining.length > 0
 
-  await userRef.set(
-    { fcmTokens: tokens, pushEnabled: tokens.length > 0 },
-    { merge: true },
-  )
-  return { ok: true, pushEnabled: tokens.length > 0 }
+  await userRef.set({ fcmTokens: remaining, pushEnabled }, { merge: true })
+  return { ok: true, pushEnabled }
 })
 
 const scheduleOpts = { secrets: [ENCRYPTION_KEY], timeZone: 'Asia/Jerusalem' }
