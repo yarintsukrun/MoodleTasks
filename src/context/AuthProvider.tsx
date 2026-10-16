@@ -8,6 +8,7 @@ import {
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { auth, db, functions, googleProvider } from '../firebase'
+import { releasePushTokenOnSignOut } from '../services/notificationService'
 import type { TaskOverride, UserSettings, ManualTask, ManualTaskInput } from '../types'
 import { MANUAL_TASK_ID_PREFIX } from '../types'
 import { AuthContext } from './authContext'
@@ -21,7 +22,9 @@ const disconnectFn = httpsCallable<{ which: 'moodle' | 'gemini' }, { ok: boolean
   'disconnect',
 )
 
-const LOCAL_KEY = 'moodle-task-manager-settings'
+/** Pre-fix shared cache key (not per-user) — removed on load so it can't leak between accounts. */
+const LEGACY_LOCAL_KEY = 'moodle-task-manager-settings'
+const localKey = (uid: string) => `${LEGACY_LOCAL_KEY}:${uid}`
 
 /** Fields the client may write to `users/{uid}`. Server-only fields (e.g. fcmTokens) are excluded. */
 const CLIENT_SETTINGS_KEYS = [
@@ -50,47 +53,67 @@ function toClientSettings(data: Record<string, unknown>): UserSettings {
   return rest as UserSettings
 }
 
-/** Local fallback so the app still works before Firestore writes succeed. */
-function readLocal(): UserSettings {
+/** Per-user local fallback so the app still works before Firestore writes succeed. */
+function readLocal(uid: string): UserSettings {
   try {
-    return JSON.parse(localStorage.getItem(LOCAL_KEY) ?? '{}')
+    return JSON.parse(localStorage.getItem(localKey(uid)) ?? '{}')
   } catch {
     return {}
   }
 }
 
-function writeLocal(settings: UserSettings) {
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(settings))
+function writeLocal(uid: string, settings: UserSettings) {
+  try {
+    localStorage.setItem(localKey(uid), JSON.stringify(settings))
+  } catch {
+    /* storage full or blocked — Firestore stays the source of truth */
+  }
+}
+
+function removeLocal(key: string) {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    /* storage blocked */
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
-  const [settings, setSettings] = useState<UserSettings>(readLocal())
+  const [settings, setSettings] = useState<UserSettings>({})
 
   useEffect(() => {
+    removeLocal(LEGACY_LOCAL_KEY)
     return onAuthStateChanged(auth, async (u) => {
       setUser(u)
-      if (u) {
-        try {
-          const snap = await getDoc(doc(db, 'users', u.uid))
-          if (snap.exists()) {
-            const remote = toClientSettings(snap.data())
-            setSettings(remote)
-            writeLocal(remote)
-          }
-        } catch (err) {
-          console.warn('Could not load settings from Firestore:', err)
-        }
+      if (!u) {
+        setSettings({})
+        setLoading(false)
+        return
       }
-      setLoading(false)
+      setLoading(true)
+      setSettings(readLocal(u.uid))
+      try {
+        const snap = await getDoc(doc(db, 'users', u.uid))
+        // Another account signed in while this read was in flight — drop it.
+        if (auth.currentUser?.uid !== u.uid) return
+        if (snap.exists()) {
+          const remote = toClientSettings(snap.data())
+          setSettings(remote)
+          writeLocal(u.uid, remote)
+        }
+      } catch (err) {
+        console.warn('Could not load settings from Firestore:', err)
+      }
+      if (auth.currentUser?.uid === u.uid) setLoading(false)
     })
   }, [])
 
   async function persist(next: UserSettings) {
     setSettings(next)
-    writeLocal(next)
     if (user) {
+      writeLocal(user.uid, next)
       try {
         // Only write client-owned fields — never clobber server fields like fcmTokens.
         await setDoc(
@@ -109,7 +132,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signOutUser() {
+    const uid = auth.currentUser?.uid
+    // Must run while still signed in (the server call needs the auth token),
+    // so this device stops receiving this account's reminders.
+    await releasePushTokenOnSignOut()
     await signOut(auth)
+    // Shared devices: don't leave this account's tasks/notes in localStorage.
+    if (uid) removeLocal(localKey(uid))
   }
 
   async function saveSettings(patch: Partial<UserSettings>) {
@@ -156,7 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (res.data.geminiConnected) flags.geminiConnected = true
     const next = { ...settings, ...flags }
     setSettings(next)
-    writeLocal(next)
+    if (user) writeLocal(user.uid, next)
   }
 
   async function disconnectSecret(which: 'moodle' | 'gemini') {
@@ -166,7 +195,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ...(which === 'moodle' ? { moodleConnected: false } : { geminiConnected: false }),
     }
     setSettings(next)
-    writeLocal(next)
+    if (user) writeLocal(user.uid, next)
   }
 
   return (

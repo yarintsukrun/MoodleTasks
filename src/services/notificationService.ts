@@ -195,6 +195,26 @@ export async function disablePushNotifications(): Promise<void> {
   storePushToken(null)
 }
 
+/**
+ * Detach this device from the signed-in account before sign-out. Deleting the
+ * FCM registration stops delivery even if the server call fails (the server
+ * prunes the dead token on its next send). Only this device's token is removed
+ * — other devices keep their reminders. Never throws: sign-out must not block.
+ */
+export async function releasePushTokenOnSignOut(): Promise<void> {
+  const token = getStoredPushToken()
+  storePushToken(null)
+  if (!token && getPushPermission() !== 'granted') return
+
+  await Promise.allSettled([
+    (async () => {
+      const messaging = await getMessagingIfSupported()
+      if (messaging) await deleteToken(messaging)
+    })(),
+    token ? unregisterPushTokenFn({ token }) : Promise.resolve(),
+  ])
+}
+
 export async function subscribeForegroundMessages(
   handler: (title: string, body: string) => void,
 ): Promise<(() => void) | null> {

@@ -5,6 +5,7 @@ const {
   filterTasksForNotifications,
   mergeNotificationPrefs,
 } = require('./parseIcs')
+const { safeFetchText } = require('./safeFetch')
 
 const CALENDAR_CACHE_TTL_MS = 15 * 60 * 1000
 
@@ -46,18 +47,13 @@ async function fetchUserIcs(db, uid, decrypt, getKey) {
   if (!enc) return null
 
   const url = decrypt(enc, getKey())
-  let res
+  let ics
   try {
-    res = await fetch(url, { redirect: 'follow' })
+    ics = await safeFetchText(url)
   } catch (err) {
-    logger.warn('Moodle fetch failed for push', { uid, err: String(err) })
+    logger.warn('Moodle fetch failed for push', { uid, code: err.code, status: err.status })
     return null
   }
-  if (!res.ok) {
-    logger.warn('Moodle bad status for push', { uid, status: res.status })
-    return null
-  }
-  const ics = await res.text()
   if (!ics.includes('BEGIN:VCALENDAR')) return null
   await cacheRef.set({ ics, fetchedAt: Date.now() })
   return ics

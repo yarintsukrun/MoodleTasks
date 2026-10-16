@@ -5,6 +5,7 @@ const logger = require('firebase-functions/logger')
 const admin = require('firebase-admin')
 const { createCipheriv, createDecipheriv, randomBytes } = require('node:crypto')
 const { runTaskPushNotifications, bootstrapKnownTasks, buildWebPushMulticast } = require('./notifications')
+const { safeFetchText, parseAllowedUrl } = require('./safeFetch')
 
 admin.initializeApp()
 const db = admin.firestore()
@@ -93,6 +94,24 @@ async function enforceRateLimit(uid, key, limit, windowMs) {
   })
 }
 
+/**
+ * A browser has one FCM token no matter who is signed in. Detach it from every
+ * other account so a shared device never receives someone else's reminders
+ * (e.g. when sign-out cleanup failed or happened before this check existed).
+ */
+async function detachTokenFromOtherUsers(uid, token) {
+  const snap = await db.collection('users').where('fcmTokens', 'array-contains', token).get()
+  await Promise.all(
+    snap.docs
+      .filter((d) => d.id !== uid)
+      .map((d) => {
+        const remaining = (d.get('fcmTokens') || []).filter((t) => t !== token)
+        logger.info('Detaching shared FCM token from previous account', { uid: d.id })
+        return d.ref.set({ fcmTokens: remaining, pushEnabled: remaining.length > 0 }, { merge: true })
+      }),
+  )
+}
+
 const callOpts = { secrets: [ENCRYPTION_KEY] }
 
 /** Encrypt and store the Moodle URL and/or Gemini key for the signed-in user. */
@@ -108,8 +127,13 @@ exports.saveSecrets = onCall(callOpts, async (request) => {
 
   if (typeof moodleUrl === 'string' && moodleUrl.trim()) {
     const url = moodleUrl.trim()
-    if (!/^https?:\/\//i.test(url)) {
-      throw new HttpsError('invalid-argument', 'That does not look like a valid URL.')
+    if (url.length > 2048) {
+      throw new HttpsError('invalid-argument', 'That URL is too long.')
+    }
+    try {
+      parseAllowedUrl(url)
+    } catch (err) {
+      throw new HttpsError('invalid-argument', err.message)
     }
     secretUpdate.moodleUrl = encrypt(url, key)
     flags.moodleConnected = true
@@ -152,6 +176,26 @@ exports.disconnect = onCall(callOpts, async (request) => {
   return { ok: true }
 })
 
+/** Map a SafeFetchError from the Moodle fetch to a user-facing HttpsError. */
+function calendarFetchError(err) {
+  switch (err && err.code) {
+    case 'invalid_url':
+    case 'blocked':
+      return new HttpsError(
+        'failed-precondition',
+        'The saved calendar link is not allowed. Paste your Moodle https:// export link again in Settings.',
+      )
+    case 'too_large':
+      return new HttpsError('failed-precondition', 'The calendar feed is too large. Export a shorter time range in Moodle.')
+    case 'bad_status':
+      return new HttpsError('unavailable', `Moodle responded with ${err.status}.`)
+    case 'timeout':
+      return new HttpsError('unavailable', 'Moodle took too long to respond. Try again later.')
+    default:
+      return new HttpsError('unavailable', 'Could not reach Moodle. Try again later.')
+  }
+}
+
 /** Fetch the user's Moodle calendar server-side and return the raw ICS. */
 exports.syncCalendar = onCall(callOpts, async (request) => {
   const uid = requireAuth(request)
@@ -179,17 +223,14 @@ exports.syncCalendar = onCall(callOpts, async (request) => {
   }
 
   const url = decrypt(enc, getKey())
-  let res
+  let ics
   try {
-    res = await fetch(url, { redirect: 'follow' })
+    ics = await safeFetchText(url)
   } catch (err) {
-    logger.error('Moodle fetch failed', err)
-    throw new HttpsError('unavailable', 'Could not reach Moodle. Try again later.')
+    // Never log the URL itself — it carries the user's Moodle token.
+    logger.warn('Moodle fetch failed', { uid, code: err.code, status: err.status })
+    throw calendarFetchError(err)
   }
-  if (!res.ok) {
-    throw new HttpsError('unavailable', `Moodle responded with ${res.status}.`)
-  }
-  const ics = await res.text()
   if (!ics.includes('BEGIN:VCALENDAR')) {
     throw new HttpsError('failed-precondition', 'The saved URL is not a valid calendar feed.')
   }
@@ -258,6 +299,7 @@ exports.registerPushToken = onCall(callOpts, async (request) => {
   const tokens = Array.isArray(userData.fcmTokens) ? userData.fcmTokens : []
   if (!tokens.includes(token)) tokens.push(token)
 
+  await detachTokenFromOtherUsers(uid, token)
   await userRef.set({ fcmTokens: tokens, pushEnabled: true }, { merge: true })
 
   if (userData.moodleConnected) {
@@ -292,6 +334,7 @@ exports.sendTestPush = onCall(callOpts, async (request) => {
 
   const tokensToSend = hasBodyToken ? [bodyToken] : storedTokens
 
+  if (hasBodyToken) await detachTokenFromOtherUsers(uid, bodyToken)
   await userRef.set({ fcmTokens: storedTokens, pushEnabled: true }, { merge: true })
 
   const res = await admin.messaging().sendEachForMulticast(
