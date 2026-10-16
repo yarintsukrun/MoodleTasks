@@ -51,7 +51,8 @@ function pickClientSettings(settings: UserSettings): Partial<UserSettings> {
 
 /** Strip server-managed fields before storing settings in React state / localStorage. */
 function toClientSettings(data: Record<string, unknown>): UserSettings {
-  const { fcmTokens: _tokens, ...rest } = data
+  const rest = { ...data }
+  delete rest.fcmTokens
   return rest as UserSettings
 }
 

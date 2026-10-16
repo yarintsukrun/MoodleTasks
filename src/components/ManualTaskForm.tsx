@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ManualTask, ManualTaskInput, TaskType } from '../types'
 import { ALL_TASK_TYPES } from '../types'
-import { TYPE_META } from './TaskCard'
+import { TYPE_META } from './taskMeta'
 
 interface Props {
   initial?: ManualTask

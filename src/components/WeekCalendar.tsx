@@ -9,7 +9,7 @@ import {
   isSameDay,
   urgency,
 } from '../utils'
-import { TYPE_META } from './TaskCard'
+import { TYPE_META } from './taskMeta'
 
 interface Props {
   tasks: MoodleTask[]

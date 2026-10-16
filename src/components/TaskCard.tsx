@@ -1,14 +1,6 @@
-import type { MoodleTask, TaskOverride, TaskType } from '../types'
+import type { MoodleTask, TaskOverride } from '../types'
 import { formatDate, formatTime, relativeLabel, urgency } from '../utils'
-
-export const TYPE_META: Record<TaskType, { icon: string; label: string }> = {
-  assignment: { icon: '📝', label: 'Assignment' },
-  quiz: { icon: '❓', label: 'Quiz' },
-  exam: { icon: '🎓', label: 'Exam' },
-  attendance: { icon: '🪑', label: 'Attendance' },
-  system: { icon: '📅', label: 'System' },
-  other: { icon: '📌', label: 'Other' },
-}
+import { TYPE_META } from './taskMeta'
 
 const PHASE_LABEL: Record<string, string> = {
   opens: 'Opens',

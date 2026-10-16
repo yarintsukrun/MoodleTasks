@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/authContext'
 import { fetchMoodleCalendar } from '../services/moodleService'
 import { breakdownTask, generateStudyPlan } from '../services/geminiService'
@@ -6,7 +6,8 @@ import { showLocalNotification, subscribeForegroundMessages } from '../services/
 import type { ManualTask, MoodleTask, TaskFilter, TaskType } from '../types'
 import { isManualTaskId, manualToMoodleTask } from '../types'
 import { urgency } from '../utils'
-import { TaskCard, TYPE_META } from './TaskCard'
+import { TaskCard } from './TaskCard'
+import { TYPE_META } from './taskMeta'
 import { Stats } from './Stats'
 import { AiPanel } from './AiPanel'
 import { Settings } from './Settings'
@@ -27,6 +28,7 @@ const FILTERS: { key: TaskFilter; label: string }[] = [
 
 const TYPE_ORDER: TaskType[] = ['assignment', 'quiz', 'exam', 'attendance', 'system', 'other']
 const DEFAULT_HIDDEN: TaskType[] = ['attendance', 'system']
+const NO_TASKS: MoodleTask[] = []
 
 export function Dashboard() {
   const {
@@ -41,7 +43,9 @@ export function Dashboard() {
   } = useAuth()
 
   const [tasks, setTasks] = useState<MoodleTask[]>([])
-  const [loading, setLoading] = useState(false)
+  /** Bumped by user-triggered syncs; `force` bypasses the server cache. */
+  const [syncRequest, setSyncRequest] = useState({ id: 0, force: false })
+  const [completedSyncId, setCompletedSyncId] = useState(-1)
   const [error, setError] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<Date | null>(null)
   const [fromCache, setFromCache] = useState(false)
@@ -62,35 +66,46 @@ export function Dashboard() {
   const hideOpens = settings.hideOpens ?? true
   const manualTasks = settings.manualTasks ?? []
 
-  const moodleTasks = tasks
+  const moodleConnected = settings.moodleConnected ?? false
+  // Derived rather than set inside the effect: the fetch effect below only
+  // sets state from its async callbacks.
+  const loading = moodleConnected && completedSyncId !== syncRequest.id
+
+  // Hide previously fetched Moodle tasks once the calendar is disconnected.
+  const moodleTasks = moodleConnected ? tasks : NO_TASKS
   const allTasks = useMemo(
     () => [...moodleTasks, ...manualTasks.map(manualToMoodleTask)],
     [moodleTasks, manualTasks],
   )
 
-  const moodleConnected = settings.moodleConnected ?? false
   const hasAnyTasks = allTasks.length > 0
   const showTaskUi = moodleConnected || hasAnyTasks
 
-  const loadTasks = useCallback(async (forceRefresh = false) => {
-    if (!settings.moodleConnected) return
-    setLoading(true)
-    setError(null)
-    try {
-      const result = await fetchMoodleCalendar(forceRefresh)
-      setTasks(result.tasks)
-      setLastSync(result.fetchedAt ?? new Date())
-      setFromCache(result.cached)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load calendar')
-    } finally {
-      setLoading(false)
-    }
-  }, [settings.moodleConnected])
+  function refreshTasks() {
+    setSyncRequest((r) => ({ id: r.id + 1, force: true }))
+  }
 
   useEffect(() => {
-    loadTasks()
-  }, [loadTasks])
+    if (!moodleConnected) return
+    let cancelled = false
+    fetchMoodleCalendar(syncRequest.force)
+      .then((result) => {
+        if (cancelled) return
+        setTasks(result.tasks)
+        setLastSync(result.fetchedAt ?? new Date())
+        setFromCache(result.cached)
+        setError(null)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load calendar')
+      })
+      .finally(() => {
+        if (!cancelled) setCompletedSyncId(syncRequest.id)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [moodleConnected, syncRequest])
 
   // While a tab is focused, FCM hands data-only pushes to the page instead of
   // the service worker, so someone must display them for the whole session —
@@ -238,7 +253,7 @@ export function Dashboard() {
           </button>
           <button
             className="btn btn-ghost btn-compact"
-            onClick={() => loadTasks(true)}
+            onClick={refreshTasks}
             disabled={loading || noUrl}
             title="Sync from Moodle"
           >
@@ -387,10 +402,10 @@ export function Dashboard() {
               </div>
             </div>
 
-            {error && (
+            {error && !loading && (
               <div className="banner banner-error">
                 <span>{error}</span>
-                <button className="btn btn-ghost" onClick={() => loadTasks(true)}>Retry</button>
+                <button className="btn btn-ghost" onClick={refreshTasks}>Retry</button>
               </div>
             )}
 
@@ -444,7 +459,7 @@ export function Dashboard() {
         <AiPanel title={ai.title} content={ai.content} loading={ai.loading} error={ai.error} onClose={() => setAi(null)} />
       )}
       {showSettings && (
-        <Settings onClose={() => setShowSettings(false)} onSaved={() => loadTasks(true)} />
+        <Settings onClose={() => setShowSettings(false)} onSaved={refreshTasks} />
       )}
       {showNotifications && (
         <NotificationPanel onClose={() => setShowNotifications(false)} />

@@ -17,7 +17,7 @@ import {
 } from '../services/notificationService'
 import type { NotificationPrefs, TaskType } from '../types'
 import { ALL_TASK_TYPES, mergeNotificationPrefs } from '../types'
-import { TYPE_META } from './TaskCard'
+import { TYPE_META } from './taskMeta'
 import { ScrollRow } from './ScrollRow'
 
 interface Props {
